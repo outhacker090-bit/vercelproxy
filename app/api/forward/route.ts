@@ -1,90 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
 
 export const runtime = "nodejs";
 
-const MAX_BODY_BYTES = 64 * 1024; // 64 KB
-
 export async function POST(request: NextRequest) {
+  // 1. Get the Discord Webhook URL from your Vercel environment variables
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  const apiKey = process.env.PROXY_API_KEY;
-
-  if (!webhookUrl || !apiKey) {
-    return NextResponse.json({ error: "Server is not configured." }, { status: 500 });
+  if (!webhookUrl) {
+    return NextResponse.json({ error: "Missing DISCORD_WEBHOOK_URL in Vercel env vars." }, { status: 500 });
   }
 
-  // Verify the webhook is a valid Discord URL
-  let parsedWebhook: URL;
-  try {
-    parsedWebhook = new URL(webhookUrl);
-  } catch {
-    return NextResponse.json({ error: "Webhook configuration is invalid." }, { status: 500 });
+  // 2. Read the RAW string from the Java mod (DO NOT PARSE IT TO AN OBJECT)
+  const rawBody = await request.text();
+  
+  if (!rawBody || rawBody.length < 5) {
+    return NextResponse.json({ error: "Request body is empty." }, { status: 400 });
   }
 
-  if (
-    parsedWebhook.protocol !== "https:" ||
-    !["discord.com", "discordapp.com"].includes(parsedWebhook.hostname) ||
-    !parsedWebhook.pathname.startsWith("/api/webhooks/")
-  ) {
-    return NextResponse.json({ error: "Webhook configuration is invalid." }, { status: 500 });
-  }
-
-  // Verify API Key
-  const authorization = request.headers.get("authorization") ?? "";
-  const suppliedKey = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-
-  const a = Buffer.from(suppliedKey);
-  const b = Buffer.from(apiKey);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  // Verify Content-Type
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.toLowerCase().includes("application/json")) {
-    return NextResponse.json({ error: "Content-Type must be application/json." }, { status: 415 });
-  }
-
-  // Safely parse the JSON body
-  let payload: any;
-  try {
-    const body = await request.text();
-    if (!body || Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
-      return NextResponse.json({ error: "Request body is empty or exceeds 64 KB." }, { status: 413 });
-    }
-    payload = JSON.parse(body);
-  } catch {
-    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
-  }
-
-  // Ensure the payload is a valid object with an embeds array
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return NextResponse.json({ error: "JSON body must be an object." }, { status: 400 });
-  }
+  // Log it to Vercel dashboard so you can verify exactly what is coming in
+  console.log("Forwarding to Discord:", rawBody);
 
   try {
+    // 3. Send the exact string to Discord
     const discordResponse = await fetch(webhookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: rawBody, // Send the string exactly as the mod made it
     });
 
     if (!discordResponse.ok) {
       const detail = await discordResponse.text();
+      console.error("Discord rejected it:", detail);
       return NextResponse.json(
-        {
-          error: "Discord rejected the webhook request.",
-          discordStatus: discordResponse.status,
-          detail: detail.slice(0, 500),
-        },
+        { error: "Discord rejected the webhook request.", detail },
         { status: 502 }
       );
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Fetch to Discord failed:", error);
-    return NextResponse.json({ error: "Could not reach Discord." }, { status: 502 });
+  } catch (error: any) {
+    console.error("Fetch failed:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
